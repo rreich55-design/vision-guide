@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Vision Guide — Prototype</title>
+<style>
+:root{color-scheme:dark;font-family:system-ui,Arial,sans-serif}body{margin:0;background:#0b1220;color:#f5f7fb;padding:18px;max-width:760px;margin:auto}h1{margin:0 0 6px}p{line-height:1.5}.muted{color:#b8c5d8}.camera{position:relative;background:#17263d;border-radius:14px;overflow:hidden;aspect-ratio:4/3}video,canvas{width:100%;height:100%;position:absolute;inset:0;object-fit:cover}canvas{pointer-events:none}button{background:#62d9bf;color:#061b18;border:0;padding:14px 18px;border-radius:10px;font-weight:700;font-size:1rem;margin:8px 8px 8px 0}button:disabled{opacity:.45}label{display:block;margin:14px 0}input{width:100%}.status{padding:12px;border:1px solid #52647e;border-radius:10px;min-height:24px}small{color:#c5d0df}a{color:#8dd9ff}
+</style>
+</head>
+<body>
+<h1>Vision Guide</h1><p class="muted">Experimental camera and voice object recognition</p>
+<div class="camera"><video id="video" autoplay muted playsinline aria-label="Live rear camera"></video><canvas id="overlay" aria-hidden="true"></canvas></div>
+<p id="status" class="status" role="status" aria-live="polite">Ready. Tap Start camera to load the model and request camera access.</p>
+<button id="start">Start camera</button><button id="stop" disabled>Stop</button>
+<label><input type="checkbox" id="voice" checked> Speak detected objects</label>
+<label>Announcement interval: <output id="intervalLabel">5 seconds</output><input type="range" id="interval" min="3" max="15" value="5"></label>
+<p><strong>Detected:</strong> <span id="detected">None yet</span></p>
+<p><small>Safety notice: This is a demonstration, NOT a mobility aid. It may miss hazards, misidentify objects, and cannot measure safe walking routes or crossing conditions. Test only while stationary in a safe indoor environment.</small></p>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
+<script>
+const video=document.getElementById('video'),canvas=document.getElementById('overlay'),ctx=canvas.getContext('2d');
+const statusEl=document.getElementById('status'),detected=document.getElementById('detected');
+const start=document.getElementById('start'),stop=document.getElementById('stop'),voice=document.getElementById('voice'),interval=document.getElementById('interval'),intervalLabel=document.getElementById('intervalLabel');
+let model=null,stream=null,running=false,lastSpeech=0,lastMessage='',session=0;
+interval.oninput=()=>intervalLabel.textContent=interval.value+' seconds';
+function setStatus(s){statusEl.textContent=s}
+function speak(s){if(!voice.checked||!('speechSynthesis' in window))return;window.speechSynthesis.cancel();let u=new SpeechSynthesisUtterance(s);u.rate=1;window.speechSynthesis.speak(u)}
+function zone(x,width){let r=x/width;return r<.35?'left':r>.65?'right':'center'}
+function draw(predictions){const w=video.videoWidth,h=video.videoHeight;if(!w||!h)return;canvas.width=w;canvas.height=h;ctx.clearRect(0,0,w,h);ctx.lineWidth=Math.max(2,w/250);ctx.font=`${Math.max(17,w/36)}px sans-serif`;for(const p of predictions){if(p.score<.55)continue;let [x,y,bw,bh]=p.bbox;ctx.strokeStyle='#62d9bf';ctx.fillStyle='#62d9bf';ctx.strokeRect(x,y,bw,bh);const label=p.class+' '+Math.round(p.score*100)+'%';const tw=ctx.measureText(label).width;ctx.fillRect(x,Math.max(0,y-30),tw+12,30);ctx.fillStyle='#07151b';ctx.fillText(label,x+6,Math.max(21,y-8))}}
+async function loop(mySession){while(running&&mySession===session){try{if(video.readyState>=2){const preds=await model.detect(video);if(!running||mySession!==session)break;draw(preds);const chosen=preds.filter(p=>p.score>=.65).sort((a,b)=>b.score-a.score).slice(0,3);let labels=chosen.map(p=>`${p.class} ${zone(p.bbox[0]+p.bbox[2]/2,video.videoWidth)}`);detected.textContent=labels.join(', ')||'No common objects recognized';let msg=labels.length?labels.join('. '):'';let now=Date.now();if(msg&&now-lastSpeech>=Number(interval.value)*1000){speak(msg);lastSpeech=now;lastMessage=msg}}}catch(e){setStatus('Detection error: '+e.message);break}await new Promise(resolve=>setTimeout(resolve,250))}}
+start.onclick=async()=>{start.disabled=true;setStatus('Loading object detection model…');try{if(!navigator.mediaDevices?.getUserMedia)throw Error('Camera access requires HTTPS and a compatible browser.');if(!window.cocoSsd)throw Error('AI library could not load. Check your internet connection.');if(!model)model=await cocoSsd.load();setStatus('Requesting rear camera permission…');stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:640},height:{ideal:480}}});video.srcObject=stream;await video.play();running=true;session++;stop.disabled=false;setStatus('Camera active. Object labels are approximate, not navigation guidance.');loop(session)}catch(e){setStatus('Unable to start: '+e.message);start.disabled=false;stream?.getTracks().forEach(t=>t.stop());stream=null}};
+stop.onclick=()=>{running=false;session++;stream?.getTracks().forEach(t=>t.stop());stream=null;video.srcObject=null;ctx.clearRect(0,0,canvas.width,canvas.height);window.speechSynthesis?.cancel();start.disabled=false;stop.disabled=true;detected.textContent='None yet';setStatus('Stopped')};
+document.addEventListener('visibilitychange',()=>{if(document.hidden&&running)stop.click()});
+</script>
+</body></html>
